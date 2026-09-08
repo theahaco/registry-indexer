@@ -8,7 +8,9 @@ use tracing_actix_web::{DefaultRootSpanBuilder, RequestId, TracingLogger};
 
 use crate::error::{internal_server_error_response, log_db_error, ErrorResponse};
 use crate::tracing::init_tracing;
-use crate::verification::{fetch_contract_verification, verify_build_webhook, VerificationInfo};
+use crate::verification::{
+    fetch_contract_verification, fetch_wasm_verification, verify_build_webhook, VerificationInfo,
+};
 use crate::wasms::{fetch_wasm_meta, fetch_wasm_spec, wasm_details_webhook, WasmMeta};
 use crate::webhooks::{load_webhook_config, webhook_auth_middleware};
 mod error;
@@ -84,6 +86,7 @@ struct WasmDetail {
     row: WasmDetailRow,
     versions: Vec<WasmVersionResult>,
     meta: Option<WasmMeta>,
+    verified: Option<VerificationInfo>,
 }
 
 /// Slim result for /contracts list endpoint
@@ -343,21 +346,25 @@ async fn fetch_wasm_detail(
 
             match versions {
                 Ok(v) => {
-                    let wasm_meta = if let Some(wasm_hash) = detail_row.wasm_hash.as_deref() {
-                        fetch_wasm_meta(pool, wasm_hash).await
-                    } else {
-                        ::tracing::warn!(
-                            wasm_name,
-                            channel,
-                            version = ?version,
-                            "missing wasm_hash; returning wasm detail without metadata"
-                        );
-                        None
-                    };
+                    let (wasm_meta, verified) =
+                        if let Some(wasm_hash) = detail_row.wasm_hash.as_deref() {
+                            let meta = fetch_wasm_meta(pool, wasm_hash).await;
+                            let verified = fetch_wasm_verification(pool, wasm_hash).await;
+                            (meta, verified)
+                        } else {
+                            ::tracing::warn!(
+                                wasm_name,
+                                channel,
+                                version = ?version,
+                                "missing wasm_hash; returning wasm detail without metadata or verification"
+                            );
+                            (None, None)
+                        };
                     HttpResponse::Ok().json(WasmDetail {
                         row: detail_row,
                         versions: v,
                         meta: wasm_meta,
+                        verified,
                     })
                 }
                 Err(e) => {
