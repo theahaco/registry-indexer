@@ -75,6 +75,31 @@ pub async fn fetch_contract_verification(
     }
 }
 
+// Stellar Expert verifies per contract, not per wasm_hash, so join through
+// v1.versions (contract_id -> wasm_hash) to find any verified contract that
+// ran this bytecode.
+pub async fn fetch_wasm_verification(pool: &PgPool, wasm_hash: &str) -> Option<VerificationInfo> {
+    let row = sqlx::query_as::<_, VerificationInfo>(
+        "SELECT cv.status, cv.repository, cv.commit_hash, cv.package, cv.path \
+         FROM v1.contract_verifications cv \
+         JOIN v1.versions v ON v.contract_id = cv.contract_id \
+         WHERE v.wasm_hash = $1 AND cv.status = 'verified' \
+         LIMIT 1",
+    )
+    .bind(wasm_hash)
+    .fetch_optional(pool)
+    .await;
+
+    match row {
+        Ok(Some(v)) => Some(v),
+        Ok(None) => None,
+        Err(e) => {
+            log_db_error("fetch_wasm_verification", &e, pool);
+            None
+        }
+    }
+}
+
 // "testnet" or "public" (Stellar Expert's own naming for mainnet) — see
 // ui/app/lib/network.ts's stellarExpertNetworkSegment for the UI-side twin
 // of this. Each network gets its own Fly app / env, so this is a plain env
